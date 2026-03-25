@@ -71,6 +71,9 @@ def parse_args():
                    help='save epoch_xxx.pth every N epochs; 0 disables it')
     p.add_argument('--save_dir', default='runs/faithful')
     p.add_argument('--resume',   default='')
+    p.add_argument('--backbone', default='resnet18',
+                   choices=['resnet18', 'inceptionv2'],
+                   help='feature extractor backbone (default: resnet18)')
     p.add_argument('--B',        type=int,   default=2,
                    help='point slots per type (paper B=2)')
     p.add_argument('--lr_steps', default='90,120',
@@ -115,7 +118,9 @@ def main():
 
     # ── model ────────────────────────────────────────────────────────────
     model = PLN(num_classes=20, img_size=args.img_size,
-                B=args.B, pretrained=True).to(device)
+                B=args.B, pretrained=True,
+                backbone=args.backbone).to(device)
+    print(f'Backbone : {args.backbone}')
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
@@ -172,14 +177,23 @@ def main():
             scheduler.load_state_dict(ck_sched)
             print(f'Restored scheduler state from checkpoint')
     elif args.reset_scheduler:
-        print(f'Scheduler reset: fresh cosine over {args.epochs - args.warmup} epochs')
+        # Reset optimizer LR to args.lr so CosineAnnealingLR base_lr is correct
+        for pg in optimizer.param_groups:
+            pg['lr'] = args.lr
+        # Re-create scheduler so base_lrs reflects the reset LR
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(args.epochs - args.warmup, 1),
+            eta_min=1e-6,
+        )
+        print(f'Scheduler reset: fresh cosine over {args.epochs - args.warmup} epochs, base_lr={args.lr}')
 
     # ── CSV 列定义 ───────────────────────────────────────────────────────────
     _BRANCHES   = ('lt', 'rt', 'lb', 'rb')
     _SUB_KEYS   = ('exist', 'cls', 'coord', 'link', 'neg')
     _SUB_COLS   = [f'{br}_{k}' for br in _BRANCHES for k in _SUB_KEYS]
     _CLASS_COLS = list(VOC_CLASSES)
-    _HEADER     = ','.join(['epoch', 'loss'] + _SUB_COLS + ['mAP'] + _CLASS_COLS)
+    _HEADER     = ','.join(['epoch', 'loss'] + list(_BRANCHES) + ['mAP'] + _CLASS_COLS)
 
     log = open(save_dir / 'log.csv', 'a')
     if start == 0:
@@ -193,6 +207,7 @@ def main():
         model.train()
         loss_sum, n_steps = 0., 0
         sub_sum = {col: 0. for col in _SUB_COLS}
+        br_sum = {br: 0. for br in _BRANCHES}
         t0 = time.time()
 
         for step, (imgs, boxes, labels) in enumerate(loader):
@@ -223,14 +238,16 @@ def main():
             loss_sum += loss.item()
             for br in _BRANCHES:
                 for k in _SUB_KEYS:
-                    sub_sum[f'{br}_{k}'] += sub.get(f'{br}/{k}', 0.)
+                    v = sub.get(f'{br}/{k}', 0.)
+                    sub_sum[f'{br}_{k}'] += v
+                    br_sum[br] += v
             n_steps  += 1
 
             if step % 100 == 0:
                 eta = (time.time()-t0)/(step+1)*(len(loader)-step-1)
+                br_str = '  '.join(f'{br}={br_sum[br]/n_steps:.3f}' for br in _BRANCHES)
                 print(f'[{epoch:03d}/{args.epochs}] {step}/{len(loader)} '
-                      f'loss={loss_sum/n_steps:.4f}  lr={lr:.6f}  '
-                      f'eta={eta/60:.1f}min')
+                      f'loss={loss_sum/n_steps:.4f}  {br_str}  lr={lr:.6f}  eta={eta/60:.1f}min')
 
         avg_loss = loss_sum / max(n_steps, 1)
 
@@ -248,9 +265,9 @@ def main():
             print()
 
         n = max(n_steps, 1)
-        sub_avg_vals = [f'{sub_sum[col]/n:.6f}' for col in _SUB_COLS]
+        br_avg_vals  = [f'{br_sum[br]/n:.6f}' for br in _BRANCHES]
         cls_ap_vals  = [f'{ap_per_class[c]:.6f}' for c in _CLASS_COLS]
-        log.write(','.join([str(epoch), f'{avg_loss:.6f}'] + sub_avg_vals +
+        log.write(','.join([str(epoch), f'{avg_loss:.6f}'] + br_avg_vals +
                            [f'{mAP:.6f}'] + cls_ap_vals) + '\n')
         log.flush()
 
@@ -258,16 +275,10 @@ def main():
                   optimizer=optimizer.state_dict(),
                   scheduler=scheduler.state_dict() if scheduler is not None else None,
                   best_map=max(best_map, mAP), args=vars(args))
-        torch.save(ck, save_dir / 'last.pth')
-        # if args.ckpt_freq > 0 and (epoch + 1) % args.ckpt_freq == 0:
-        #     snap_path = save_dir / f'epoch_{epoch + 1:03d}.pth'
-        #     torch.save(ck, snap_path)
-        #     print(f'  Saved snapshot: {snap_path.name}')
         if args.ckpt_freq > 0 and (epoch + 1) % args.ckpt_freq == 0:
             snap_path = save_dir / f'epoch_{epoch + 1:03d}.pth'
             torch.save(ck, snap_path)
             print(f'  Saved snapshot: {snap_path.name}')
-            # 删除上一个snapshot
             for old in save_dir.glob('epoch_*.pth'):
                 if old != snap_path:
                     old.unlink()
