@@ -79,6 +79,8 @@ def parse_args():
                    help='lr decay factor at each milestone')
     p.add_argument('--cosine', action='store_true',
                    help='use cosine annealing LR instead of step decay')
+    p.add_argument('--reset_scheduler', action='store_true',
+                   help='ignore saved scheduler state on resume (use when extending epochs)')
     return p.parse_args()
 
 
@@ -164,11 +166,13 @@ def main():
         print(f'LR schedule: warmup {args.warmup} epochs ({args.warmup_lr}→{args.lr}), '
               f'decay×{args.lr_gamma} at epochs {milestones}')
 
-    if args.resume and scheduler is not None:
+    if args.resume and scheduler is not None and not args.reset_scheduler:
         ck_sched = torch.load(args.resume, map_location=device).get('scheduler')
         if ck_sched is not None:
             scheduler.load_state_dict(ck_sched)
             print(f'Restored scheduler state from checkpoint')
+    elif args.reset_scheduler:
+        print(f'Scheduler reset: fresh cosine over {args.epochs - args.warmup} epochs')
 
     # ── CSV 列定义 ───────────────────────────────────────────────────────────
     _BRANCHES   = ('lt', 'rt', 'lb', 'rb')
