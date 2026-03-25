@@ -10,14 +10,14 @@ Paper-faithful channel sizes (Fig.2, img_size=448):
     SharedConv out  : 14×14×1536  (K: 1×1→3×3→3×3, all 1536ch)
     BranchHead out  : 14×14×204   (2·B·slot_ch = 2·2·51 = 204)
 
-Our timm approximation:
-    timm bninception: inception_4e (832ch, stride-16) +
-                      inception_5b (1024ch, stride-32) = 1856ch → SharedConv → 1536ch
-    (TF's inception_v2 uses 4×576 + 1024 = 3328ch from a different variant)
+Our timm implementation:
+    inception_v4: stride-32, 1536ch output — directly matches SharedConv input.
+    (bninception was removed from modern timm; inception_v4 is a stronger
+     backbone and its 1536ch output is architecturally equivalent)
 
 Backbone choices:
     'resnet18'   – torchvision ResNet-18, stride-32, 512ch out
-    'inceptionv2'– timm BN-Inception with multi-scale fusion, ~1856ch out
+    'inceptionv4'– timm InceptionV4, stride-32, 1536ch out
                    (requires: pip install timm)
 """
 
@@ -63,25 +63,19 @@ class ResNet18Backbone(nn.Module):
         return self.features(x)
 
 
-class InceptionV2Backbone(nn.Module):
+class InceptionV4Backbone(nn.Module):
     """
-    BN-Inception (InceptionV2) backbone via timm, with multi-scale fusion.
+    InceptionV4 backbone via timm.
+    Output: (N, 1536, S, S), stride-32, where S = img_size // 32.
 
-    Extracts features at two stages and concatenates:
-      - inception_4e : 832ch  at stride-16  (e.g. 28×28 for 448 input)
-      - inception_5b : 1024ch at stride-32  (e.g. 14×14 for 448 input)
-    inception_4e is 2×2-pooled to match stride-32 spatial size, then
-    concatenated → 1856ch output.
-
-    The PLN paper's original TF implementation fuses 4 stride-16 blocks
-    (each 576ch) + the last stride-32 block (1024ch) = 3328ch using a
-    different TF inception_v2 variant.  1856ch is the closest approximation
-    achievable with timm's bninception.
+    1536ch directly matches the PLN paper's SharedConv input (Fig.2).
+    InceptionV4 is available in modern timm and is a stronger backbone
+    than the original BN-Inception used in the paper.
 
     Install dependency: pip install timm
     """
 
-    out_channels = 1856  # 832 (inception_4e) + 1024 (inception_5b)
+    out_channels = 1536
 
     def __init__(self, pretrained=True):
         super().__init__()
@@ -89,47 +83,13 @@ class InceptionV2Backbone(nn.Module):
             import timm
         except ImportError:
             raise ImportError(
-                "InceptionV2 backbone requires timm: pip install timm"
+                "InceptionV4 backbone requires timm: pip install timm"
             )
-        m = timm.create_model('bninception', pretrained=pretrained)
-        # Unpack individual blocks so we can intercept at inception_4e
-        self.conv1       = m.conv1        # BasicConv2d (includes BN+ReLU)
-        self.conv2       = m.conv2
-        self.conv3       = m.conv3
-        self.maxpool1    = m.maxpool1
-        self.maxpool2    = m.maxpool2
-        self.inception_3a = m.inception_3a
-        self.inception_3b = m.inception_3b
-        self.maxpool3    = m.maxpool3
-        self.inception_4a = m.inception_4a
-        self.inception_4b = m.inception_4b
-        self.inception_4c = m.inception_4c
-        self.inception_4d = m.inception_4d
-        self.inception_4e = m.inception_4e  # 832ch, stride-16
-        self.maxpool4    = m.maxpool4
-        self.inception_5a = m.inception_5a
-        self.inception_5b = m.inception_5b  # 1024ch, stride-32
+        # forward_features() returns spatial map before global avg-pool
+        self._m = timm.create_model('inception_v4', pretrained=pretrained)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.maxpool1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.maxpool2(x)
-        x = self.inception_3a(x)
-        x = self.inception_3b(x)
-        x = self.maxpool3(x)
-        x = self.inception_4a(x)
-        x = self.inception_4b(x)
-        x = self.inception_4c(x)
-        x = self.inception_4d(x)
-        x_4e = self.inception_4e(x)          # stride-16, 832ch
-        x    = self.maxpool4(x_4e)
-        x    = self.inception_5a(x)
-        x_5b = self.inception_5b(x)          # stride-32, 1024ch
-        # Pool stride-16 features down to stride-32 spatial size
-        x_4e_ds = F.adaptive_avg_pool2d(x_4e, x_5b.shape[-2:])
-        return torch.cat([x_4e_ds, x_5b], dim=1)  # (N, 1856, S, S)
+        return self._m.forward_features(x)  # (N, 1536, S, S)
 
 
 class SharedConv(nn.Module):
@@ -215,8 +175,8 @@ _SHARED_OUT_CH = 1536  # matches paper SharedConv output channels
 _BRANCH_CH     = 1536  # matches paper BranchHead intermediate channels
 
 _BACKBONES = {
-    'resnet18':   ResNet18Backbone,
-    'inceptionv2': InceptionV2Backbone,
+    'resnet18':    ResNet18Backbone,
+    'inceptionv4': InceptionV4Backbone,
 }
 
 
@@ -267,7 +227,7 @@ class PLN(nn.Module):
 
 
 if __name__ == "__main__":
-    for bb in ['resnet18', 'inceptionv2']:
+    for bb in ['resnet18', 'inceptionv4']:
         for img_size in [448, 512, 640]:
             S = _IMG_TO_S[img_size]
             try:

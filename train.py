@@ -72,7 +72,7 @@ def parse_args():
     p.add_argument('--save_dir', default='runs/faithful')
     p.add_argument('--resume',   default='')
     p.add_argument('--backbone', default='resnet18',
-                   choices=['resnet18', 'inceptionv2'],
+                   choices=['resnet18', 'inceptionv4'],
                    help='feature extractor backbone (default: resnet18)')
     p.add_argument('--B',        type=int,   default=2,
                    help='point slots per type (paper B=2)')
