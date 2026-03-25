@@ -1,0 +1,96 @@
+python train.py \
+    --voc07 /root/data/VOCdevkit/VOC2007 \
+    --voc12 /root/data/VOCdevkit/VOC2012 \
+    --img_size 448 \
+    --epochs 135 \
+    --batch 64 \
+    --lr 5e-3 \
+    --warmup 3 \
+    --lr_steps 90,120 \
+    --lr_gamma 0.1 \
+    --save_dir runs/pln_v1
+
+
+$env:https_proxy = "http://127.0.0.1:7890"
+$env:http_proxy = "http://127.0.0.1:7890"
+
+ssh -p 37841 root@connect.nmb1.seetacloud.com
+#上传代码ssh -p 39585 root@connect.nmb2.seetacloud.com
+scp -P 37841 -r "D:/vsc/PLN_code_only_clean/PLN_baseline" root@connect.nmb2.seetacloud.com:/root/
+
+#数据集准备
+mkdir -p /root/data/VOCdevkit
+tar xzf /root/autodl-pub/VOCdevkit/VOC2007.tar.gz -C /root/data/VOCdevkit/
+tar xzf /root/autodl-pub/VOCdevkit/VOC2012.tar.gz -C /root/data/VOCdevkit/
+
+#安装依赖
+pip install -r requirements.txt
+
+# 验证
+ls /root/data/VOCdevkit/VOC2007/
+
+
+ python train.py --voc07 /root/data/VOCdevkit/VOC2007 --voc12 /root/data/VOCdevkit/VOC2012 --img_size 448 --epochs 135 --batch 64 --lr 1e-3 --warmup 3 --warmup_lr 2e-4 --lr_steps 40,70,100 --lr_gamma 0.1 --save_dir runs/pln_v2
+
+ 改成60/100
+
+
+ 使用-cosine学习率衰减：
+ python train.py \
+      --voc07 /root/data/VOCdevkit/VOC2007 \
+      --voc12 /root/data/VOCdevkit/VOC2012 \
+      --img_size 640 \
+      --epochs 135 \
+      --batch 64 \
+      --lr 1e-3 \
+      --warmup 3 \
+      --warmup_lr 2e-4 \
+      --cosine \
+      --save_dir runs/pln_640_cosine \
+      --resume runs/pln_640_cosine/last.pth
+      
+  cd PLN_baseline    
+python train.py \
+    --voc07 /root/data/VOCdevkit/VOC2007 \
+    --voc12 /root/data/VOCdevkit/VOC2012 \
+    --img_size 640 \
+    --epochs 200 \
+    --batch 64 \
+    --lr 1e-3 \
+    --warmup 5 \
+    --warmup_lr 2e-4 \
+    --cosine \
+    --save_dir runs/pln_640_fpn \
+    --val_freq 5
+    
+CUDA_VISIBLE_DEVICES=0,1,2 python train.py \
+        --voc07 /root/data/VOCdevkit/VOC2007 \
+        --voc12 /root/data/VOCdevkit/VOC2012 \
+        --img_size 640 \
+        --epochs 200 \
+        --batch 192 \
+        --lr 3e-3 \          
+        --warmup 5 \
+        --warmup_lr 6e-4 \   
+        --cosine \
+        --save_dir runs/pln_640_fpn_new \
+        --val_freq 5
+      
+      
+Final mAP@0.5 = 0.2834                                                                                              aeroplane        0.4020                                                                                           bicycle          0.2837                                                                                           bird             0.1715                                                                                           boat             0.1165                                                                                           bottle           0.0031                                                                                           bus              0.4737
+  car              0.4616
+  cat              0.4634                                                                                         
+  chair            0.1487                                                                                         
+  cow              0.1749                                                                                         
+  diningtable      0.1948                                                                                         
+  dog              0.3422                                                                                         
+  horse            0.3994                                                                                         
+  motorbike        0.4619                                                                                         
+  person           0.3942                                                                                         
+  pottedplant      0.0045                                                                                         
+  sheep            0.2104                                                                                         
+  sofa             0.2562                                                                                         
+  train            0.5335                                                                                         
+  tvmonitor        0.1720      
+      
+      
