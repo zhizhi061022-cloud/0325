@@ -10,13 +10,11 @@ Paper-faithful channel sizes (Fig.2, img_size=448):
     SharedConv out  : 14×14×1536  (K: 1×1→3×3→3×3, all 1536ch)
     BranchHead out  : 14×14×204   (2·B·slot_ch = 2·2·51 = 204)
 
-Our timm implementation:
-    inception_v4: stride-32, 1536ch output — directly matches SharedConv input.
-    (bninception was removed from modern timm; inception_v4 is a stronger
-     backbone and its 1536ch output is architecturally equivalent)
-
 Backbone choices:
     'resnet18'   – torchvision ResNet-18, stride-32, 512ch out
+    'inceptionv2'– Cadene pretrainedmodels BN-Inception, stride-32, 1024ch out
+                   Closest PyTorch equivalent to paper's TF inception_v2.
+                   (requires: pip install pretrainedmodels)
     'inceptionv4'– timm InceptionV4, stride-32, 1536ch out
                    (requires: pip install timm)
 """
@@ -63,14 +61,57 @@ class ResNet18Backbone(nn.Module):
         return self.features(x)
 
 
+class InceptionV2Backbone(nn.Module):
+    """
+    BN-Inception (InceptionV2) via Cadene's pretrainedmodels library.
+    Output: (N, 1024, S, S), stride-32, where S = img_size // 32.
+
+    This is the closest PyTorch equivalent to the paper's TF inception_v2.
+
+    Differences vs paper's TF inception_v2:
+      - Paper TF version outputs 3328ch via multi-block fusion
+        (4 stride-16 blocks × 576ch + 1 stride-32 block × 1024ch).
+        This requires extracting intermediate TF-Slim Mixed_4x features
+        which don't exist in this PyTorch port.
+      - This implementation uses only the final stride-32 block: 1024ch.
+      - SharedConv's first 1×1 conv projects 1024 → 1536 (paper: 3328→1536).
+      - Normalization: pretrainedmodels uses BGR mean=[104,117,123]/255,
+        std=[1,1,1]; our VOCDataset uses ImageNet RGB stats — slight mismatch,
+        acceptable for diagnostic experiments.
+
+    Install dependency: pip install pretrainedmodels
+
+    Reference: https://github.com/Cadene/pretrained-models.pytorch
+    """
+
+    out_channels = 1024  # inception_5b output, stride-32
+
+    def __init__(self, pretrained=True):
+        super().__init__()
+        try:
+            import pretrainedmodels
+        except ImportError:
+            raise ImportError(
+                "InceptionV2 backbone requires pretrainedmodels:\n"
+                "  pip install pretrainedmodels"
+            )
+        m = pretrainedmodels.__dict__['bninception'](
+            pretrained='imagenet' if pretrained else None
+        )
+        # m.features(x) → (N, 1024, H/32, W/32), all BN+ReLU included
+        self.features = m.features
+
+    def forward(self, x):
+        return self.features(x)  # (N, 1024, S, S)
+
+
 class InceptionV4Backbone(nn.Module):
     """
     InceptionV4 backbone via timm.
     Output: (N, 1536, S, S), stride-32, where S = img_size // 32.
 
     1536ch directly matches the PLN paper's SharedConv input (Fig.2).
-    InceptionV4 is available in modern timm and is a stronger backbone
-    than the original BN-Inception used in the paper.
+    Use this as a stronger alternative, NOT for paper-faithful diagnostics.
 
     Install dependency: pip install timm
     """
@@ -85,7 +126,6 @@ class InceptionV4Backbone(nn.Module):
             raise ImportError(
                 "InceptionV4 backbone requires timm: pip install timm"
             )
-        # forward_features() returns spatial map before global avg-pool
         self._m = timm.create_model('inception_v4', pretrained=pretrained)
 
     def forward(self, x):
@@ -176,7 +216,8 @@ _BRANCH_CH     = 1536  # matches paper BranchHead intermediate channels
 
 _BACKBONES = {
     'resnet18':    ResNet18Backbone,
-    'inceptionv4': InceptionV4Backbone,
+    'inceptionv2': InceptionV2Backbone,   # BN-Inception, paper-faithful diagnostic
+    'inceptionv4': InceptionV4Backbone,   # stronger alternative
 }
 
 
@@ -227,7 +268,7 @@ class PLN(nn.Module):
 
 
 if __name__ == "__main__":
-    for bb in ['resnet18', 'inceptionv4']:
+    for bb in ['resnet18', 'inceptionv2', 'inceptionv4']:
         for img_size in [448, 512, 640]:
             S = _IMG_TO_S[img_size]
             try:
