@@ -98,11 +98,14 @@ class InceptionV2Backbone(nn.Module):
         m = pretrainedmodels.__dict__['bninception'](
             pretrained='imagenet' if pretrained else None
         )
-        # m.features(x) → (N, 1024, H/32, W/32), all BN+ReLU included
-        self.features = m.features
+        # Store the full model as a submodule so .to(device) moves all weights.
+        # (m.features is a plain method, not nn.Module — storing it directly
+        #  would leave weights on CPU when the parent is moved to GPU.)
+        del m.last_linear   # drop unused classifier head
+        self._m = m
 
     def forward(self, x):
-        return self.features(x)  # (N, 1024, S, S)
+        return self._m.features(x)  # (N, 1024, S, S)
 
 
 class InceptionV4Backbone(nn.Module):
