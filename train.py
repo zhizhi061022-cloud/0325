@@ -131,15 +131,20 @@ def main():
                       conf_thresh=0.05, nms_thresh=0.45)
 
     # ── optimiser: paper uses RMSProp ─────────────────────────────────────
-    # Separate BN/bias (no weight decay) from weights (weight decay)
+    # Separate BN/bias (no weight decay) from weights (weight decay).
+    # Use id() dedup to avoid the "duplicate parameters" warning that
+    # occurred with the old modules() traversal.
     wd_params, no_wd_params = [], []
-    for m in model.modules():
-        if isinstance(m, torch.nn.BatchNorm2d):
-            no_wd_params += list(m.parameters())
-        elif hasattr(m, 'weight') and isinstance(m.weight, torch.nn.Parameter):
-            wd_params.append(m.weight)
-        if hasattr(m, 'bias') and isinstance(m.bias, torch.nn.Parameter):
-            no_wd_params.append(m.bias)
+    seen = set()
+    for module in model.modules():
+        for name, param in module.named_parameters(recurse=False):
+            if id(param) in seen or not param.requires_grad:
+                continue
+            seen.add(id(param))
+            if isinstance(module, torch.nn.BatchNorm2d) or name == 'bias':
+                no_wd_params.append(param)
+            else:
+                wd_params.append(param)
 
     optimizer = optim.RMSprop(
         [{'params': wd_params,    'weight_decay': args.wd},
